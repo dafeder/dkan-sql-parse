@@ -2,10 +2,8 @@
 
 namespace SqlParserTest;
 
-use Symfony\Component\VarDumper\VarDumper;
-
 /**
- * Simple iterator to move through tree and translate to DatastoreQuery format.
+ * Recursive processor to move through tree and translate to DatastoreQuery format.
  */
 class TreeTranslator
 {
@@ -14,6 +12,15 @@ class TreeTranslator
     const CONDITION_GROUP_PROCESSOR = 'conditionGroupBracketExpression';
     const EXPRESSION_PROCESSOR = 'expressionBracketExpression';
 
+    /**
+     * Translate an arbitrary tree.
+     *
+     * @param array $tree
+     *   A PHPSQLParser tree.
+     *
+     * @return array
+     *   The appropriate data for use in DatastoreQuery.
+     */
     public static function translate($tree)
     {
         if (!is_array($tree)) {
@@ -23,16 +30,38 @@ class TreeTranslator
         return self::$translateFunc($tree);
     }
 
-    public static function getTranslateFunc(array $tree)
+    /**
+     * Get the method name to perform the appropriate translation.
+     * @param array $tree
+     *   A PHPSQLParser tree.
+     *
+     * @return string
+     *   An existing method name.
+     */
+    public static function getTranslateFunc(array $tree): string
     {
         if (!isset($tree['expr_type'])) {
             throw new \InvalidArgumentException("Invalid parsed tree.");
         }
         $translateFunc = lcfirst(implode('', array_map('ucfirst', explode('_', $tree['expr_type']))));
         $translateFunc = lcfirst(implode('', array_map('ucfirst', explode('-', $translateFunc))));
+        
+        if (!method_exists(self::class, $translateFunc)) {
+            throw new \InvalidArgumentException("Unsupported tree type.");
+        }
+        
         return $translateFunc;
     }
 
+    /**
+     * Translate a table.
+     *
+     * @param array $tree
+     *   A "table" PHPSQLParser tree.
+     *
+     * @return array
+     *   Resource array for use in DatastoreQuery.
+     */
     public static function table(array $tree)
     {
         $resource = [];
@@ -122,12 +151,34 @@ class TreeTranslator
     }
 
 
-    public static function operator($tree)
+    /**
+     * Translate an operator.
+     *
+     * @param array $tree
+     *   An "operator" PHPSQLParser tree.
+     *
+     * @return string
+     *   Operator for use in DatastoreQuery.
+     */
+    public static function operator(array $tree): string
     {
         return strtolower($tree['base_expr']);
     }
 
-    public static function getBracketExpressionProcessor($tree)
+    /**
+     * Get the correct method name for a bracket_expression.
+     *
+     * Three different object types from DatastoreQuery are represented as
+     * bracket_expression trees in PHPSQLParser. They can be distinguished
+     * by the types of operators they use.
+     *
+     * @param array $tree
+     *   A "bracket_expression" PHPSQLParser tree.
+     *
+     * @return string
+     *   Valid public static method name from this class.
+     */
+    public static function getBracketExpressionProcessor(array $tree): string
     {
         $operators = self::gatherExpressionOperators($tree);
 
@@ -152,7 +203,16 @@ class TreeTranslator
         }
     }
 
-    public static function inList($tree)
+    /**
+     * Translate a in-list.
+     *
+     * @param array $tree
+     *   An "in-list" PHPSQLParser tree.
+     *
+     * @return array
+     *   Array of possible values for use with "in" operator.
+     */
+    public static function inList(array $tree): array
     {
         $list = [];
         foreach ($tree['sub_tree'] as $subTree) {
@@ -161,7 +221,16 @@ class TreeTranslator
         return $list;
     }
 
-    public static function aggregateFunction($tree)
+    /**
+     * Translate an aggregate function.
+     *
+     * @param array $tree
+     *   An "aggregate_function" PHPSQLParser tree.
+     *
+     * @return array
+     *   Aggregate expression for use in DatastoreQuery.
+     */
+    public static function aggregateFunction(array $tree): array
     {
         $expression = ['expression' => ['operator' => strtolower($tree['base_expr'])]];
 
@@ -183,16 +252,36 @@ class TreeTranslator
             throw new \InvalidArgumentException("Mathematical expressions must be aliased.");
         }
 
-        VarDumper::dump($expression);
         return array_filter($expression);
     }
 
-    public static function bracketExpression($tree)
+    /**
+     * Translate a bracketed expression.
+     *
+     * Routed to one of the more specific translator funcitons by
+     * self::getBracketExpressionProcessor().
+     *
+     * @param array $tree
+     *   A "bracket_expression" PHPSQLParser tree.
+     *
+     * @return array
+     *   Operator for use in DatastoreQuery.
+     */
+    public static function bracketExpression(array $tree): array
     {
         $func = self::getBracketExpressionProcessor($tree);
         return self::$func($tree);
     }
 
+    /**
+     * Translate a bracketed expression that maps to a "condition".
+     *
+     * @param array $tree
+     *   A "bracket_expression" PHPSQLParser tree.
+     *
+     * @return array
+     *   Condition for use in DatastoreQuery.
+     */
     public static function conditionBracketExpression($tree)
     {
         $property = self::translate($tree['sub_tree'][0]);
@@ -205,7 +294,16 @@ class TreeTranslator
         return array_filter($condition);
     }
 
-    public static function expressionBracketExpression($tree)
+    /**
+     * Translate a bracketed expression that maps to an "expression".
+     *
+     * @param array $tree
+     *   A "bracket_expression" PHPSQLParser tree.
+     *
+     * @return array
+     *   Math expression for use as DatastoreQuery property.
+     */
+    public static function expressionBracketExpression(array $tree): array
     {
         $subTree = $tree['sub_tree'];
         $expression = ['expression' => ['operator' => self::translate($subTree[1])]];
@@ -222,7 +320,16 @@ class TreeTranslator
         return array_filter($expression);
     }
 
-    public static function conditionGroupBracketExpression($tree)
+    /**
+     * Translate a bracketed expression that maps to a "conditionGroup".
+     *
+     * @param array $tree
+     *   A "bracket_expression" PHPSQLParser tree.
+     *
+     * @return array
+     *   Condition group for use in DatastoreQuery conditions array.
+     */
+    public static function conditionGroupBracketExpression(array $tree): array
     {
         $operators = self::gatherExpressionOperators($tree);
         if (count(array_unique($operators)) != 1) {
@@ -238,7 +345,16 @@ class TreeTranslator
         return $conditionGroup;
     }
 
-    public static function gatherExpressionOperators($tree)
+    /**
+     * Create an array of operator strings from a bracket expression.
+     *
+     * @param array $tree
+     *   A "bracket_expression" PHPSQLParser tree.
+     *
+     * @return array
+     *   An array of operators (strings) used in an expression.
+     */
+    public static function gatherExpressionOperators(array $tree): array
     {
         foreach ($tree['sub_tree'] as $part) {
             if ($part['expr_type'] == 'operator') {

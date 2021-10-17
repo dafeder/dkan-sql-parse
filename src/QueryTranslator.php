@@ -3,19 +3,46 @@
 namespace SqlParserTest;
 
 use Exception;
+use InvalidArgumentException;
 use Symfony\Component\VarDumper\VarDumper;
 
+/**
+ * Translate a full parsed query.
+ */
 class QueryTranslator
 {
     private $resource;
     private $parsed;
 
+    /**
+     * Translate a parsed SQL query.
+     *
+     * @param array $parsed
+     *   The result of a PHPSQLParser operation on a SQL string.
+     * @param string|null $resource
+     *   A resource ID for the Datastore.
+     * @param bool $allowJoins
+     *   Whether joins are allowed or not in this query; defaults to false.
+     *
+     * @return DatastoreQuery
+     *   A valid DatastoreQuery object.
+     */
     public static function translate(array $parsed, $resource = null, bool $allowJoins = false)
     {
         $translator = new static($parsed, $resource, $allowJoins);
         return $translator->translateParsed();
     }
 
+    /**
+     * Constructor.
+     *
+     * @param array $parsed
+     *   The result of a PHPSQLParser operation on a SQL string.
+     * @param string|null $resource
+     *   A resource ID for the Datastore.
+     * @param bool $allowJoins
+     *   Whether joins are allowed or not in this query; defaults to false.
+     */
     public function __construct(array $parsed, $resource = null, bool $allowJoins = false)
     {
         $this->resource = $resource;
@@ -23,7 +50,13 @@ class QueryTranslator
         $this->allowJoins = $allowJoins;
     }
 
-    private function translateParsed()
+    /**
+     * Translate the loaded parsed query to a DatastoreQuery obejct.
+     *
+     * @return DatastoreQuery
+     *   Valid DatastoreQuery object.
+     */
+    public function translateParsed(): DatastoreQuery
     {
         $query = [];
 
@@ -47,12 +80,19 @@ class QueryTranslator
         }
 
         $query = array_filter($query);
-        
-        VarDumper::dump($query);
         return new DatastoreQuery($query);
     }
 
-    private function translateFrom(array $from)
+    /**
+     * Translate the FROM clause.
+     *
+     * @param array $from
+     *   FROM array from a full PHPSQLParser array.
+     *
+     * @return array
+     *   Array of DatastoreQuery resources.
+     */
+    private function translateFrom(array $from): array
     {
         $this->incorporateResource($from);
         $this->validateJoins($from);
@@ -60,7 +100,7 @@ class QueryTranslator
         foreach ($from as $resource) {
             $resources[] = TreeTranslator::translate($resource);
         }
-        return $resources;
+        return array_filter($resources);
     }
 
     private function incorporateResource(array &$query)
@@ -77,6 +117,17 @@ class QueryTranslator
         }
     }
 
+    /**
+     * Translate the FROM clause to joins on another pass.
+     *
+     * @param array $from
+     *   FROM array from a full PHPSQLParser array.
+     *
+     * @return array
+     *   Array of DatastoreQuery joins.
+     *
+     * @todo Add actual JOIN support.
+     */
     private function translateFromJoins(array $from)
     {
         if ($this->addJoins()) {
@@ -88,6 +139,9 @@ class QueryTranslator
 
     /**
      * Check whether or not to add a joins array to the query.
+     *
+     * @return bool
+     *   True if we should attempt to add joins.
      */
     private function addJoins(): bool
     {
@@ -100,9 +154,15 @@ class QueryTranslator
 
     /**
      * Ensure the FROM clause is valid given the allowJoins argument.
+     *
      * @param array $from
-     * @return true
-     * @throws Exception
+     *   FROM array from a full PHPSQLParser array.
+     *
+     * @return bool
+     *   Returns true if the FROM array is valid for this query.
+     *
+     * @throws \Exception
+     *   This method will throw an exception if the FROM array violates the rules.
      */
     private function validateJoins(array $from)
     {
@@ -115,7 +175,16 @@ class QueryTranslator
         return true;
     }
 
-    private function translateSelect(array $select)
+    /**
+     * Translate the SELECT clause.
+     *
+     * @param array $select
+     *   FROM array from a full PHPSQLParser array.
+     *
+     * @return array
+     *   Array of DatastoreQuery properties.
+     */
+    private function translateSelect(array $select): array
     {
         $properties = [];
         try {
@@ -132,8 +201,11 @@ class QueryTranslator
     /**
      * WHERE clause requires more complex logic to break up.
      *
-     * @param array $conditions
+     * @param array $where
+     *   FROM array from a full PHPSQLParser array.
+     *
      * @return array
+     *   Conditions array for DatastoreQuery.
      */
     private function translateWhere(array $where)
     {
@@ -160,17 +232,44 @@ class QueryTranslator
         return [$whereGroup];
     }
 
+    /**
+     * Translate the LIMIT clause to a value for DatastoreQuery "limit".
+     *
+     * @param array $limit
+     *   LIMIT array from a full PHPSQLParser array.
+     *
+     * @return int|null
+     *   A limit value, if present.
+     */
     private function translateLimit($limit)
     {
         return ((int) $limit['rowcount']) ?? null;
     }
 
+    /**
+     * Translate the LIMIT clause to a value for DatastoreQuery "offset".
+     *
+     * @param array $limit
+     *   LIMIT array from a full PHPSQLParser array.
+     *
+     * @return int|null
+     *   An offset value, if present.
+     */
     private function translateLimitOffset($limit)
     {
         return ((int) $limit['offset']) ?? null;
     }
 
-    private function translateOrder(array $order)
+    /**
+     * Translate the ORDER clause to DatastoreQuery "sorts".
+     *
+     * @param array $order
+     *   ORDER array from a full PHPSQLParser array.
+     *
+     * @return array
+     *   An array of sort arrays for DatastoreQuery.
+     */
+    private function translateOrder(array $order): array
     {
         $sorts = [];
         try {
