@@ -2,6 +2,8 @@
 
 namespace SqlParserTest;
 
+use Symfony\Component\VarDumper\VarDumper;
+
 /**
  * Recursive processor to move through tree and translate to DatastoreQuery format.
  */
@@ -129,6 +131,27 @@ class TreeTranslator
         $property['property'] = $tree['base_expr'];
         $property['order'] = strtolower($tree['direction'] ?? null);
         return array_filter($property);
+    }
+
+    /**
+     * Translate a reserved keyword.
+     *
+     * @param array $tree
+     *   An "reserved" PHPSQLParser tree.
+     *
+     * @return mixed
+     *   Correct expression value; current only true and false supported.
+     */
+    public static function reserved(array $tree)
+    {
+        if (strtolower($tree['base_expr']) == "true") {
+            return true;
+        }
+        if (strtolower($tree['base_expr']) == "false") {
+            return false;
+        } else {
+            throw new \InvalidArgumentException("Unknown reserved word used in expression.");
+        }       
     }
 
     /**
