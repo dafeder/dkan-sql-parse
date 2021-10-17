@@ -1,11 +1,13 @@
 {
-    "name": "dafeder/sql-parse",
+    "name": "dafeder/sql-parse-test",
     "description": "Testing parsing",
     "require": {
         "symfony/console": "^5.3",
         "greenlion/php-sql-parser": "^4.4",
-        "symfony/var-dumper": "^5.3",
         "getdkan/rooted-json-data": "^0.0.4"
+    },
+    "require-dev": {
+        "symfony/var-dumper": "^5.3"
     },
     "autoload": {
         "psr-4": {
