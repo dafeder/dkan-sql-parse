@@ -2,10 +2,6 @@
 
 namespace SqlParserTest;
 
-use Exception;
-use InvalidArgumentException;
-use Symfony\Component\VarDumper\VarDumper;
-
 /**
  * Translate a full parsed query.
  */
