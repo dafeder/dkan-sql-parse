@@ -40,8 +40,10 @@ class ParseCommand extends Command
         }
 
         $io = new SymfonyStyle($input, $output);
-        $io->success("Valid DatastoreQuery object returned. Outputting JSON payload.");
+        $io->newLine();
         $io->write($query->pretty());
+        $io->newLine();
+        $io->success("Valid DatastoreQuery object returned.");
 
         return Command::SUCCESS;
     }
