@@ -44,7 +44,7 @@ class ParseCommand extends Command
         return Command::SUCCESS;
     }
 
-    private function detectLegacy(string $sql) 
+    private function detectLegacy(string $sql)
     {
         return (substr($sql, 0, 1) == '[');
     }

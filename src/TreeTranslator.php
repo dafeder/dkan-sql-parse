@@ -175,7 +175,7 @@ class TreeTranslator
         // Check for missing operands.
         $expression['expression']['operands'] = array_filter($expression['expression']['operands']);
         if (empty($expression['expression']['operands'])) {
-            throw new \InvalidArgumentException("You may not perform aggregate functions without specific property arguments.");
+            throw new \InvalidArgumentException("Mathmatical functions require property-specific arguments.");
         }
 
         $expression['alias'] = $tree['alias']['name'] ?? null;
@@ -185,7 +185,6 @@ class TreeTranslator
 
         VarDumper::dump($expression);
         return array_filter($expression);
-
     }
 
     public static function bracketExpression($tree)
