@@ -151,7 +151,7 @@ class TreeTranslator
             return false;
         } else {
             throw new \InvalidArgumentException("Unknown reserved word used in expression.");
-        }       
+        }
     }
 
     /**
@@ -356,7 +356,7 @@ class TreeTranslator
     {
         $operators = self::gatherExpressionOperators($tree);
         if (count(array_unique($operators)) != 1) {
-            throw new \Exception("Condition groups must contain a single boolean operator.");
+            throw new \Exception("Condition groups must not mix boolean operators.");
         }
 
         $operands = self::getExpressionOperands($tree);
