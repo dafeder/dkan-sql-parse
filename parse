@@ -6,7 +6,7 @@ require __DIR__.'/vendor/autoload.php';
 use SqlParserTest\Command\ParseCommand;
 use Symfony\Component\Console\Application;
 
-$application = new Application('generate', '1.0.0');
+$application = new Application('parse');
 $command = new ParseCommand();
 
 $application->add($command);

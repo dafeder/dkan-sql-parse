@@ -26,8 +26,8 @@ name or any unescaped input directly from API requests.
 Pass a SQL string. To simulate a resource argument from the DKAN API, pass a `--resource` 
 option.
 
-At the moment we're simply debugging the result to demonstrate what's happening, so the 
-output is a bit messy. This is really intentended to be moved into DKAN to support a new
+If your query is successfully translated, you will get a success message and the JSON version
+of the API request. This is really intended to be moved into DKAN to support a new
 controller. Still, you will see the validity of the DatastoreQuery object or see the
 details of any exceptions thrown.
 

@@ -9,7 +9,7 @@ use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
-use Symfony\Component\VarDumper\VarDumper;
+use Symfony\Component\Console\Style\SymfonyStyle;
 
 class ParseCommand extends Command
 {
@@ -35,11 +35,13 @@ class ParseCommand extends Command
         $parser = new PHPSQLParser($sql);
         try {
             $query = QueryTranslator::translate($parser->parsed, $resource);
-            VarDumper::dump($query);
         } catch (\Exception $e) {
-            VarDumper::dump($e);
             throw $e;
         }
+
+        $io = new SymfonyStyle($input, $output);
+        $io->success("Valid DatastoreQuery object returned. Outputting JSON payload.");
+        $io->write($query->pretty());
 
         return Command::SUCCESS;
     }
