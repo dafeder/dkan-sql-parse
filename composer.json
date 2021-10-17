@@ -1,0 +1,21 @@
+{
+    "name": "dafeder/sql-parse",
+    "description": "Testing parsing",
+    "require": {
+        "symfony/console": "^5.3",
+        "greenlion/php-sql-parser": "^4.4",
+        "symfony/var-dumper": "^5.3",
+        "getdkan/rooted-json-data": "^0.0.4"
+    },
+    "autoload": {
+        "psr-4": {
+            "SqlParserTest\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "Dan Feder",
+            "email": "dan.feder@civicactions.com"
+        }
+    ]
+}
