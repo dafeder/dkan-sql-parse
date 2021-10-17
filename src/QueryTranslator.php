@@ -56,6 +56,8 @@ class QueryTranslator
     {
         $query = [];
 
+        $this->validateParsedClauses();
+
         if (isset($this->parsed['SELECT'])) {
             $query['properties'] = $this->translateSelect($this->parsed['SELECT']);
         }
@@ -77,6 +79,26 @@ class QueryTranslator
 
         $query = array_filter($query);
         return new DatastoreQuery($query);
+    }
+
+    /**
+     * Throws an exception if unallowed clauses detected.
+     *
+     * @return true
+     *   True if clauses all passed.
+     *
+     * @throws \InvalidArgumentException
+     */
+    private function validateParsedClauses()
+    {
+        $clauses = array_keys($this->parsed);
+        $allowed = ['SELECT', 'FROM', 'WHERE', 'LIMIT', 'ORDER'];
+        $diff = array_diff($clauses, $allowed);
+        if (count($diff)) {
+            $bad = implode(", ", $diff);
+            throw new \InvalidArgumentException("Prohibited SQL clauses detected: $bad");
+        }
+        return true;
     }
 
     /**
