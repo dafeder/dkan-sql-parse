@@ -356,6 +356,7 @@ class TreeTranslator
      */
     public static function gatherExpressionOperators(array $tree): array
     {
+        $operators = [];
         foreach ($tree['sub_tree'] as $part) {
             if ($part['expr_type'] == 'operator') {
                 $operators[] = self::translate($part);
