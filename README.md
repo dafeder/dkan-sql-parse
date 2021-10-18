@@ -31,11 +31,17 @@ of the API request. This is really intended to be moved into DKAN to support a n
 controller. Still, you will see the validity of the DatastoreQuery object or see the
 details of any exceptions thrown.
 
+In DKAN, table names are obscured from the user and referenced indirectly through resource
+identifiers. As in any valid SQL statement, dashes (`-`) are not permitted in column names
+in strings passed to this parser. So if you are passing a UUID (e.g. 
+"909ab5c6-54b6-40ac-96bc-f7198c9c734d") as a pseudo table name, you will need to wrap it 
+in tick marks (`` ` ``).
+
 Some examples:
 
-1. `./parse "SELECT record_number FROM tablename t WHERE something LIKE '%whatever'"`
-2. `./parse "SELECT record_number, (object_id + 4) FROM tablename t WHERE (something LIKE '%whatever') AND (somethingelse = 2)"`
-3. `./parse --resource=tablename "SELECT record_number WHERE something LIKE '%whatever'"`
+1. ``./parse 'SELECT record_number FROM `table-name` t WHERE something LIKE "%whatever"'``
+2. `./parse 'SELECT record_number, (object_id + 4) FROM tablename t WHERE (something LIKE "%whatever") AND (somethingelse = 2)'`
+3. `./parse --resource=tablename 'SELECT record_number WHERE something LIKE "%whatever"'`
 
 Please throw different, more complex queries at it and try to break it! As long as you don't see 
 any exception messages at the bottom of the output, that should mean this will work once
@@ -44,7 +50,7 @@ against a real DKAN instance to see if the results are as expected.
 
 ## Limitations
 
-* Any WHERE conditions joined by a boolean operator must be wrapped in parenthases to be properly read. For instance, `WHERE col = 1` and `WHERE (col1 = 1) AND (col2 = 2)` are both valid, but `WHERE col = 1 AND col2 = 2` will fail, even though on MySQL and most other systems it would be valid.
+* Any WHERE conditions joined by a boolean operator must be wrapped in parentheses to be properly read. For instance, `WHERE col = 1` and `WHERE (col1 = 1) AND (col2 = 2)` are both valid, but `WHERE col = 1 AND col2 = 2` will fail, even though on MySQL and most other systems it would be valid.
 * Joins are not yet supported.
 * There were some [additional methods](https://github.com/dafeder/dkan-sql-parse/blob/master/src/DatastoreQuery.php#L45) added to DatastoreQuery that would need to be ported to the DKAN version of this class for this to work. The query.json file though should be a straight copy.
 * [Resource alias handling](https://github.com/dafeder/dkan-sql-parse/issues/2)
