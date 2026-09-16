@@ -7,8 +7,9 @@ namespace SqlParserTest;
  */
 class QueryTranslator
 {
-    private $resource;
-    private $parsed;
+    private ?string $resource;
+    private array $parsed;
+    private bool $allowJoins;
 
     /**
      * Translate a parsed SQL query.

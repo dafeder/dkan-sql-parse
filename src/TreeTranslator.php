@@ -92,7 +92,7 @@ class TreeTranslator
         $property['resource'] = count($parts) > 1 ? $parts[0] : self::DEFAULT_RESOURCE;
         $property['property'] = end($parts);
         $property['alias'] = $tree['alias']['name'] ?? null;
-        $property['order'] = strtolower($tree['direction'] ?? null);
+        $property['order'] = ($tree['direction'] ?? FALSE) ? strtolower($tree['direction']) : null;
         return array_filter($property);
     }
 
