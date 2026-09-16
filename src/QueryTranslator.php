@@ -231,7 +231,7 @@ class QueryTranslator
         if (!is_array($where) || empty($where)) {
             throw new \InvalidArgumentException("Invalid WHERE clause.");
         }
-        
+
         // If there's only one item in the where array, it must be
         // a single bracket expression.
         if (count($where) == 1) {

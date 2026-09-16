@@ -9,10 +9,10 @@ use Symfony\Component\VarDumper\VarDumper;
  */
 class TreeTranslator
 {
-    const DEFAULT_RESOURCE = 't';
-    const CONDITION_PROCESSOR = 'conditionBracketExpression';
-    const CONDITION_GROUP_PROCESSOR = 'conditionGroupBracketExpression';
-    const EXPRESSION_PROCESSOR = 'expressionBracketExpression';
+    public const DEFAULT_RESOURCE = 't';
+    public const CONDITION_PROCESSOR = 'conditionBracketExpression';
+    public const CONDITION_GROUP_PROCESSOR = 'conditionGroupBracketExpression';
+    public const EXPRESSION_PROCESSOR = 'expressionBracketExpression';
 
     /**
      * Translate an arbitrary tree.
@@ -47,11 +47,11 @@ class TreeTranslator
         }
         $translateFunc = lcfirst(implode('', array_map('ucfirst', explode('_', $tree['expr_type']))));
         $translateFunc = lcfirst(implode('', array_map('ucfirst', explode('-', $translateFunc))));
-        
+
         if (!method_exists(self::class, $translateFunc)) {
             throw new \InvalidArgumentException("Unsupported tree type.");
         }
-        
+
         return $translateFunc;
     }
 
@@ -92,7 +92,7 @@ class TreeTranslator
         $property['resource'] = count($parts) > 1 ? $parts[0] : self::DEFAULT_RESOURCE;
         $property['property'] = end($parts);
         $property['alias'] = $tree['alias']['name'] ?? null;
-        $property['order'] = ($tree['direction'] ?? FALSE) ? strtolower($tree['direction']) : null;
+        $property['order'] = ($tree['direction'] ?? false) ? strtolower($tree['direction']) : null;
         return array_filter($property);
     }
 
@@ -263,7 +263,7 @@ class TreeTranslator
         foreach ($tree['sub_tree'] as $operand) {
             $expression['expression']['operands'][] = self::translate($operand);
         }
-    
+
         // Check for missing operands.
         $expression['expression']['operands'] = array_filter($expression['expression']['operands']);
         if (empty($expression['expression']['operands'])) {
