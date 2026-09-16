@@ -2,11 +2,18 @@
 
 namespace SqlParserTest;
 
+use PhpMyAdmin\SqlParser\Components\Expression;
+use PhpMyAdmin\SqlParser\Components\Limit;
+use PhpMyAdmin\SqlParser\Components\OrderKeyword;
+use PhpMyAdmin\SqlParser\Statements\SelectStatement;
+
 /**
  * Translate a full parsed query.
  */
 class QueryTranslator
 {
+    private const DEFAULT_RESOURCE = 't';
+
     private ?string $resource;
     private array $parsed;
     private bool $allowJoins;
@@ -28,6 +35,146 @@ class QueryTranslator
     {
         $translator = new static($parsed, $resource, $allowJoins);
         return $translator->translateParsed();
+    }
+
+    /**
+     * Translate a phpmyadmin SelectStatement query.
+     *
+     * Slice 2 intentionally supports SELECT/FROM/ORDER/LIMIT.
+     * WHERE and richer clauses are implemented in the next slice.
+     */
+    public static function translateStatement(SelectStatement $statement, ?string $resource = null): DatastoreQuery
+    {
+        self::validateStatementClauses($statement);
+        $query = [];
+
+        if (!empty($statement->expr)) {
+            $query['properties'] = self::translateStatementSelect($statement->expr);
+        }
+        if (!empty($statement->from)) {
+            $query['resources'] = self::translateStatementFrom($statement->from);
+        }
+        self::incorporateStatementResource($query, $resource, $statement);
+        if (!empty($statement->order)) {
+            $query['sorts'] = self::translateStatementOrder($statement->order);
+        }
+        if ($statement->limit instanceof Limit) {
+            $query['limit'] = (int) $statement->limit->rowCount;
+            $query['offset'] = (int) $statement->limit->offset;
+        }
+
+        $query = array_filter($query);
+        return new DatastoreQuery($query);
+    }
+
+    /**
+     * @param Expression[] $select
+     */
+    private static function translateStatementSelect(array $select): array
+    {
+        $properties = [];
+        foreach ($select as $part) {
+            if (!($part instanceof Expression)) {
+                throw new \InvalidArgumentException('Unsupported SELECT expression type.');
+            }
+            $properties[] = self::translateStatementSelectExpression($part);
+        }
+        return array_filter($properties);
+    }
+
+    private static function translateStatementSelectExpression(Expression $expr)
+    {
+        if (($expr->column === '*') || (trim((string) $expr->expr) === '*')) {
+            return null;
+        }
+        if (!empty($expr->column)) {
+            $property = [
+                'resource' => !empty($expr->table) ? $expr->table : self::DEFAULT_RESOURCE,
+                'property' => $expr->column,
+                'alias' => $expr->alias ?: null,
+            ];
+            return array_filter($property);
+        }
+
+        if (!empty($expr->expr)) {
+            throw new \InvalidArgumentException('Unsupported SELECT expression for current parser path.');
+        }
+        throw new \InvalidArgumentException('Invalid SELECT expression.');
+    }
+
+    /**
+     * @param Expression[] $from
+     */
+    private static function translateStatementFrom(array $from): array
+    {
+        if (count($from) > 1) {
+            throw new \Exception('Joins are not permitted for this query; you have requested too many resources.');
+        }
+
+        $resources = [];
+        foreach ($from as $part) {
+            if (!($part instanceof Expression) || empty($part->table)) {
+                throw new \InvalidArgumentException('Invalid FROM clause.');
+            }
+            $resources[] = [
+                'id' => $part->table,
+                'alias' => $part->alias ?: self::DEFAULT_RESOURCE,
+            ];
+        }
+        return $resources;
+    }
+
+    private static function incorporateStatementResource(array &$query, ?string $resource, SelectStatement $statement): void
+    {
+        if ($resource && !empty($statement->from)) {
+            throw new \InvalidArgumentException('You may not pass a FROM clause in a resource query.');
+        }
+        if ($resource) {
+            $query['resources'] = [
+                [
+                    'id' => $resource,
+                    'alias' => self::DEFAULT_RESOURCE,
+                ],
+            ];
+        }
+    }
+
+    /**
+     * @param OrderKeyword[] $order
+     */
+    private static function translateStatementOrder(array $order): array
+    {
+        $sorts = [];
+        foreach ($order as $part) {
+            if (!($part instanceof OrderKeyword) || !($part->expr instanceof Expression)) {
+                throw new \InvalidArgumentException('Invalid ORDER clause.');
+            }
+
+            $property = $part->expr->column ?: trim((string) $part->expr->expr);
+            if (empty($property)) {
+                throw new \InvalidArgumentException('Invalid ORDER clause.');
+            }
+
+            $sorts[] = [
+                'resource' => !empty($part->expr->table) ? $part->expr->table : self::DEFAULT_RESOURCE,
+                'property' => $property,
+                'order' => strtolower($part->type->value),
+            ];
+        }
+        return $sorts;
+    }
+
+    private static function validateStatementClauses(SelectStatement $statement): void
+    {
+        if (!empty($statement->where)) {
+            throw new \InvalidArgumentException('WHERE translation for phpmyadmin parser path is not implemented yet.');
+        }
+        if (!empty($statement->join)) {
+            throw new \InvalidArgumentException('Joins are not permitted for this query; you have requested too many resources.');
+        }
+        if (!empty($statement->group) || !empty($statement->having) || !empty($statement->union)) {
+            throw new \InvalidArgumentException('Prohibited SQL clauses detected for current parser path.');
+        }
     }
 
     /**
