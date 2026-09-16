@@ -6,6 +6,7 @@ namespace SqlParserTest\Tests;
 
 use PHPSQLParser\PHPSQLParser;
 use PHPUnit\Framework\TestCase;
+use SqlParserTest\DatastoreQuery;
 use SqlParserTest\QueryTranslator;
 
 final class QueryTranslatorBaselineTest extends TestCase
@@ -139,7 +140,10 @@ final class QueryTranslatorBaselineTest extends TestCase
     {
         $parser = new PHPSQLParser($sql);
         $query = QueryTranslator::translate($parser->parsed, $resource);
+        $payload = json_decode($query->pretty(), true, 512, JSON_THROW_ON_ERROR);
+        $validated = new DatastoreQuery($payload);
+        self::assertInstanceOf(DatastoreQuery::class, $validated);
 
-        return json_decode($query->pretty(), true, 512, JSON_THROW_ON_ERROR);
+        return $payload;
     }
 }
