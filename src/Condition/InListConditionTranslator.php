@@ -28,7 +28,7 @@ class InListConditionTranslator implements ConditionTranslatorInterface
         $operator = strtolower(preg_replace('/\s+/', ' ', $matches[2]));
 
         $values = [];
-        $rawValues = str_getcsv($matches[3], ',');
+        $rawValues = str_getcsv($matches[3], ',', '"', '\\');
         foreach ($rawValues as $rawValue) {
             $values[] = ValueNormalizer::normalize($rawValue);
         }

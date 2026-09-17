@@ -19,7 +19,7 @@ class FromClauseTranslator implements ClauseTranslatorInterface
     {
         if (!empty($statement->from)) {
             if (count($statement->from) > 1) {
-                throw new \Exception('Joins are not permitted for this query; you have requested too many resources.');
+                throw new \InvalidArgumentException('Joins are not permitted for this query; you have requested too many resources.');
             }
 
             $resources = [];

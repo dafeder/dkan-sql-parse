@@ -67,3 +67,21 @@ Pretty JSON output
 2. **Joins not supported**: Single table only; queries with multiple tables throw an exception.
 3. **Table identifiers with dashes (UUIDs)**: Must be backtick-quoted (e.g. `` `909ab5c6-54b6-40ac-96bc-f7198c9c734d` ``).
 4. **Computed expressions must be aliased**: `(col + 4) AS n` and `COUNT(col) AS c` require explicit aliases.
+
+---
+
+## SQL Injection Defense & Parser Boundary Behavior
+
+While full data security and parameter binding is handled at the DKAN/Drupal storage layer, the parsing and translation layer acts as a strict structural filter. It ensures raw SQL strings are never passed directly to downstream systems, and malicious or unsupported structures are caught early.
+
+| Injection Vector | Example Attack Input | Parser / Translator Layer Defense | Result |
+|---|---|---|---|
+| **DDL / DML Statements** | `DROP TABLE users`, `UPDATE users SET ...`, `DELETE FROM ...` | `SqlStatementParser::parseSelect()` enforces that only `SelectStatement` ASTs are parsed. | `InvalidArgumentException: Only SELECT statements are supported.` |
+| **Stacked / Multi-Query Injections** | `SELECT ...; DROP TABLE users; --` | Parser only extracts `statements[0]`; secondary injected statements are ignored and discarded. | Injected statement discarded; only legitimate `SELECT` translated. |
+| **UNION-Based Injections** | `SELECT ... UNION SELECT password FROM users` | `StatementGuard::validate()` inspects AST and blocks `UNION` / `UNION ALL`. | `InvalidArgumentException: Prohibited SQL clauses detected` |
+| **JOIN-Based Injections** | `SELECT ... JOIN users ON 1=1` | `StatementGuard::validate()` and `FromClauseTranslator` strictly prohibit multiple table sources / joins. | `InvalidArgumentException: Joins are not permitted for this query` |
+| **Dangerous System Functions** | `SELECT SLEEP(5)`, `BENCHMARK(...)`, `LOAD_FILE(...)`, `VERSION()` | `AggregateFunctionTranslator` whitelists allowed functions (`sum`, `count`, `avg`, `max`, `min`). | `InvalidArgumentException: Unsupported aggregate function.` |
+| **Subqueries in SELECT** | `SELECT (SELECT password FROM users) AS p` | `ArithmeticExpressionTranslator` rejects subquery AST expressions. | `InvalidArgumentException: Invalid arithmetic expression.` |
+| **Comment Injection** | `SELECT ... WHERE id = 1 -- AND is_admin = 0` | Lexer cleanly strips line comments (`--`) and block comments (`/* */`) without corrupting AST. | Comment stripped; condition preserved cleanly. |
+| **Tautologies (e.g. `OR 1=1`)** | `WHERE id = 1 OR 1=1` | Input is parsed into structured DatastoreQuery AST condition objects (e.g. `property: "1", operator: "=", value: 1`), preventing raw SQL breakout. | Bound safely downstream by DKAN/Drupal layer. |
+
