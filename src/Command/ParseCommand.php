@@ -2,6 +2,7 @@
 
 namespace SqlParserTest\Command;
 
+use SqlParserTest\LegacyInputNormalizer;
 use SqlParserTest\QueryTranslator;
 use SqlParserTest\SqlStatementParser;
 use Symfony\Component\Console\Command\Command;
@@ -26,9 +27,12 @@ class ParseCommand extends Command
     {
         $sql = $input->getArgument('sql');
         $resource = $input->getOption('resource');
-        if ($this->detectLegacy($sql)) {
+
+        $normalizer = new LegacyInputNormalizer();
+        if ($normalizer->supports($sql)) {
             $output->write('Legacy SQL endpoint format detected.', true);
-            return Command::SUCCESS;
+            $sql = $normalizer->normalize($sql);
+            $output->write('Normalized SQL: ' . $sql, true);
         }
 
         $parser = new SqlStatementParser();
