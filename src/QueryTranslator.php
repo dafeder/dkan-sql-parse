@@ -3,6 +3,7 @@
 namespace SqlParserTest;
 
 use PhpMyAdmin\SqlParser\Components\Expression;
+use PhpMyAdmin\SqlParser\Components\Condition;
 use PhpMyAdmin\SqlParser\Components\Limit;
 use PhpMyAdmin\SqlParser\Components\OrderKeyword;
 use PhpMyAdmin\SqlParser\Statements\SelectStatement;
@@ -55,6 +56,9 @@ class QueryTranslator
             $query['resources'] = self::translateStatementFrom($statement->from);
         }
         self::incorporateStatementResource($query, $resource, $statement);
+        if (!empty($statement->where)) {
+            $query['conditions'] = self::translateStatementWhere($statement->where);
+        }
         if (!empty($statement->order)) {
             $query['sorts'] = self::translateStatementOrder($statement->order);
         }
@@ -97,7 +101,9 @@ class QueryTranslator
         }
 
         if (!empty($expr->expr)) {
-            throw new \InvalidArgumentException('Unsupported SELECT expression for current parser path.');
+            throw new \InvalidArgumentException(
+                'Unsupported SELECT expression for current parser path.'
+            );
         }
         throw new \InvalidArgumentException('Invalid SELECT expression.');
     }
@@ -118,13 +124,18 @@ class QueryTranslator
             }
             $resources[] = [
                 'id' => $part->table,
-                'alias' => $part->alias ?: self::DEFAULT_RESOURCE,
+                'alias' => $part->alias
+                    ?: self::DEFAULT_RESOURCE,
             ];
         }
         return $resources;
     }
 
-    private static function incorporateStatementResource(array &$query, ?string $resource, SelectStatement $statement): void
+    private static function incorporateStatementResource(
+        array &$query,
+        ?string $resource,
+        SelectStatement $statement
+    ): void
     {
         if ($resource && !empty($statement->from)) {
             throw new \InvalidArgumentException('You may not pass a FROM clause in a resource query.');
@@ -156,7 +167,9 @@ class QueryTranslator
             }
 
             $sorts[] = [
-                'resource' => !empty($part->expr->table) ? $part->expr->table : self::DEFAULT_RESOURCE,
+                'resource' => !empty($part->expr->table)
+                    ? $part->expr->table
+                    : self::DEFAULT_RESOURCE,
                 'property' => $property,
                 'order' => strtolower($part->type->value),
             ];
@@ -164,17 +177,319 @@ class QueryTranslator
         return $sorts;
     }
 
-    private static function validateStatementClauses(SelectStatement $statement): void
+    private static function validateStatementClauses(
+        SelectStatement $statement
+    ): void
     {
-        if (!empty($statement->where)) {
-            throw new \InvalidArgumentException('WHERE translation for phpmyadmin parser path is not implemented yet.');
-        }
         if (!empty($statement->join)) {
-            throw new \InvalidArgumentException('Joins are not permitted for this query; you have requested too many resources.');
+            throw new \InvalidArgumentException(
+                'Joins are not permitted for this query; you have requested too many resources.'
+            );
         }
         if (!empty($statement->group) || !empty($statement->having) || !empty($statement->union)) {
             throw new \InvalidArgumentException('Prohibited SQL clauses detected for current parser path.');
         }
+    }
+
+    /**
+     * @param Condition[] $where
+     */
+    private static function translateStatementWhere(array $where): array
+    {
+        if (empty($where)) {
+            throw new \InvalidArgumentException('Empty WHERE clause.');
+        }
+
+        $tokens = self::tokenizeWhere($where);
+        $index = 0;
+        $tree = self::parseWhereOr($tokens, $index);
+
+        if ($index !== count($tokens)) {
+            throw new \InvalidArgumentException('Invalid WHERE clause.');
+        }
+
+        if (isset($tree['groupOperator']) && $tree['groupOperator'] === 'and') {
+            return $tree['conditions'];
+        }
+
+        return [$tree];
+    }
+
+    /**
+     * @param Condition[] $where
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private static function tokenizeWhere(array $where): array
+    {
+        $tokens = [];
+        foreach ($where as $part) {
+            if (!($part instanceof Condition)) {
+                throw new \InvalidArgumentException('Invalid WHERE clause.');
+            }
+
+            if ($part->isOperator) {
+                $operator = strtolower(trim($part->expr));
+                if ($operator !== 'and' && $operator !== 'or') {
+                    throw new \InvalidArgumentException('Invalid WHERE clause.');
+                }
+                $tokens[] = ['type' => 'operator', 'value' => $operator];
+                continue;
+            }
+
+            [$openParens, $closeParens] = self::extractConditionParens($part);
+
+            for ($i = 0; $i < $openParens; $i++) {
+                $tokens[] = ['type' => 'lparen'];
+            }
+
+            $tokens[] = ['type' => 'condition', 'value' => self::translateStatementCondition($part)];
+
+            for ($i = 0; $i < $closeParens; $i++) {
+                $tokens[] = ['type' => 'rparen'];
+            }
+        }
+
+        return $tokens;
+    }
+
+    private static function countLeadingParentheses(string $expr): int
+    {
+        $count = 0;
+        $length = strlen($expr);
+        for ($i = 0; $i < $length; $i++) {
+            if ($expr[$i] !== '(') {
+                break;
+            }
+            $count++;
+        }
+        return $count;
+    }
+
+    private static function countTrailingParentheses(string $expr): int
+    {
+        $count = 0;
+        for ($i = strlen($expr) - 1; $i >= 0; $i--) {
+            if ($expr[$i] !== ')') {
+                break;
+            }
+            $count++;
+        }
+        return $count;
+    }
+
+    /**
+     * @return array{0: int, 1: int}
+     */
+    private static function extractConditionParens(Condition $condition): array
+    {
+        if (trim($condition->operator) !== '') {
+            $open = self::countLeadingParentheses(trim($condition->leftOperand));
+            $close = self::countTrailingParentheses(trim($condition->rightOperand));
+            return [$open, $close];
+        }
+
+        $expr = trim($condition->expr);
+        $open = self::countLeadingParentheses($expr);
+        $close = self::countTrailingParentheses($expr);
+
+        // IN/NOT IN always has a list-closing parenthesis that is not grouping.
+        if (preg_match('/\bNOT\s+IN\s*\(|\bIN\s*\(/i', $expr)) {
+            $close = max(0, $close - 1);
+        }
+
+        return [$open, $close];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function parseWhereOr(array $tokens, int &$index): array
+    {
+        $left = self::parseWhereAnd($tokens, $index);
+        while (self::matchWhereOperator($tokens, $index, 'or')) {
+            $right = self::parseWhereAnd($tokens, $index);
+            $left = self::mergeConditionNodes('or', $left, $right);
+        }
+        return $left;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function parseWhereAnd(array $tokens, int &$index): array
+    {
+        $left = self::parseWhereFactor($tokens, $index);
+        while (self::matchWhereOperator($tokens, $index, 'and')) {
+            $right = self::parseWhereFactor($tokens, $index);
+            $left = self::mergeConditionNodes('and', $left, $right);
+        }
+        return $left;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function parseWhereFactor(array $tokens, int &$index): array
+    {
+        if (!isset($tokens[$index])) {
+            throw new \InvalidArgumentException('Invalid WHERE clause.');
+        }
+
+        if ($tokens[$index]['type'] === 'lparen') {
+            $index++;
+            $node = self::parseWhereOr($tokens, $index);
+            if (!isset($tokens[$index]) || $tokens[$index]['type'] !== 'rparen') {
+                throw new \InvalidArgumentException('Invalid WHERE clause.');
+            }
+            $index++;
+            return $node;
+        }
+
+        if ($tokens[$index]['type'] !== 'condition') {
+            throw new \InvalidArgumentException('Invalid WHERE clause.');
+        }
+
+        $node = $tokens[$index]['value'];
+        $index++;
+        return $node;
+    }
+
+    private static function matchWhereOperator(array $tokens, int &$index, string $operator): bool
+    {
+        if (!isset($tokens[$index])) {
+            return false;
+        }
+        if ($tokens[$index]['type'] !== 'operator') {
+            return false;
+        }
+        if ($tokens[$index]['value'] !== $operator) {
+            return false;
+        }
+        $index++;
+        return true;
+    }
+
+    /**
+     * @param array<string, mixed> $left
+     * @param array<string, mixed> $right
+     *
+     * @return array<string, mixed>
+     */
+    private static function mergeConditionNodes(string $operator, array $left, array $right): array
+    {
+        $conditions = [];
+        if (isset($left['groupOperator']) && $left['groupOperator'] === $operator) {
+            $conditions = array_merge($conditions, $left['conditions']);
+        } else {
+            $conditions[] = $left;
+        }
+
+        if (isset($right['groupOperator']) && $right['groupOperator'] === $operator) {
+            $conditions = array_merge($conditions, $right['conditions']);
+        } else {
+            $conditions[] = $right;
+        }
+
+        return [
+            'groupOperator' => $operator,
+            'conditions' => $conditions,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function translateStatementCondition(Condition $condition): array
+    {
+        $operator = strtolower(trim($condition->operator));
+        if ($operator === '') {
+            return self::translateStatementInCondition($condition);
+        }
+
+        $property = self::translateStatementIdentifier($condition->leftOperand);
+        $translated = [
+            'resource' => $property['resource'],
+            'property' => $property['property'],
+            'operator' => $operator,
+            'value' => self::normalizeStatementValue($condition->rightOperand),
+        ];
+        return array_filter($translated);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function translateStatementInCondition(Condition $condition): array
+    {
+        $expr = trim($condition->expr);
+
+        if (!preg_match('/^(.+?)\s+(NOT\s+IN|IN)\s*\((.*)\)$/i', (string) $expr, $matches)) {
+            throw new \InvalidArgumentException('Unsupported WHERE condition.');
+        }
+
+        $property = self::translateStatementIdentifier($matches[1]);
+        $operator = strtolower(preg_replace('/\s+/', ' ', $matches[2]));
+
+        $values = [];
+        $rawValues = str_getcsv($matches[3], ',');
+        foreach ($rawValues as $rawValue) {
+            $values[] = self::normalizeStatementValue($rawValue);
+        }
+
+        $translated = [
+            'resource' => $property['resource'],
+            'property' => $property['property'],
+            'operator' => $operator,
+            'value' => $values,
+        ];
+        return array_filter($translated);
+    }
+
+    /**
+     * @return array{resource: string, property: string}
+     */
+    private static function translateStatementIdentifier(string $identifier): array
+    {
+        $clean = trim($identifier);
+        $clean = ltrim($clean, '(');
+        $clean = rtrim($clean, ')');
+        $clean = trim($clean, " \t\n\r\0\x0B`");
+
+        $parts = array_values(array_filter(explode('.', $clean), static fn ($part) => $part !== ''));
+        if (empty($parts)) {
+            throw new \InvalidArgumentException('Invalid WHERE identifier.');
+        }
+
+        return [
+            'resource' => count($parts) > 1 ? trim($parts[0], '`') : self::DEFAULT_RESOURCE,
+            'property' => trim($parts[count($parts) - 1], '`'),
+        ];
+    }
+
+    /**
+     * @return string|int|float|bool
+     */
+    private static function normalizeStatementValue(string $raw)
+    {
+        $value = trim($raw);
+        $value = ltrim($value, '(');
+        $value = rtrim($value, ')');
+        $value = trim($value);
+
+        $lower = strtolower($value);
+        if ($lower === 'true') {
+            return true;
+        }
+        if ($lower === 'false') {
+            return false;
+        }
+
+        if (is_numeric($value)) {
+            return ((string) (int) $value === $value) ? (int) $value : (float) $value;
+        }
+
+        return trim($value, "'\"");
     }
 
     /**

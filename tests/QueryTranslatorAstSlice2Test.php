@@ -51,14 +51,52 @@ final class QueryTranslatorAstSlice2Test extends TestCase
         self::assertSame('record_number', $payload['properties'][0]['property']);
     }
 
-    public function testThrowsForWhereUntilSliceThree(): void
+    public function testTranslatesUnparenthesizedAndWhere(): void
     {
         $sql = sprintf('SELECT record_number FROM `%s` t WHERE record_number = 1', self::RESOURCE_ID);
+        $payload = $this->translateSqlToPayloadFromStatement($sql);
 
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('WHERE translation for phpmyadmin parser path is not implemented yet.');
+        self::assertSame(
+            [[
+                'resource' => 't',
+                'property' => 'record_number',
+                'operator' => '=',
+                'value' => 1,
+            ]],
+            $payload['conditions']
+        );
+    }
 
-        $this->translateSqlToPayloadFromStatement($sql);
+    public function testTranslatesUnparenthesizedMixedBooleanWhereWithPrecedence(): void
+    {
+        $sql = sprintf(
+            'SELECT record_number FROM `%s` t WHERE record_number = 1 OR record_number = 2 AND record_number > 0',
+            self::RESOURCE_ID
+        );
+        $payload = $this->translateSqlToPayloadFromStatement($sql);
+
+        self::assertSame('or', $payload['conditions'][0]['groupOperator']);
+        self::assertSame('=', $payload['conditions'][0]['conditions'][0]['operator']);
+        self::assertSame('and', $payload['conditions'][0]['conditions'][1]['groupOperator']);
+    }
+
+    public function testTranslatesInAndNotInWhere(): void
+    {
+        $sqlIn = sprintf(
+            'SELECT record_number FROM `%s` t WHERE record_number IN (1,2,3)',
+            self::RESOURCE_ID
+        );
+        $payloadIn = $this->translateSqlToPayloadFromStatement($sqlIn);
+        self::assertSame('in', $payloadIn['conditions'][0]['operator']);
+        self::assertSame([1, 2, 3], $payloadIn['conditions'][0]['value']);
+
+        $sqlNotIn = sprintf(
+            'SELECT record_number FROM `%s` t WHERE record_number NOT IN (1,2,3)',
+            self::RESOURCE_ID
+        );
+        $payloadNotIn = $this->translateSqlToPayloadFromStatement($sqlNotIn);
+        self::assertSame('not in', $payloadNotIn['conditions'][0]['operator']);
+        self::assertSame([1, 2, 3], $payloadNotIn['conditions'][0]['value']);
     }
 
     private function translateSqlToPayloadFromStatement(string $sql, ?string $resource = null): array
