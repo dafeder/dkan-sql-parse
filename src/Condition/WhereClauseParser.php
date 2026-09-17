@@ -1,0 +1,296 @@
+<?php
+
+declare(strict_types=1);
+
+namespace SqlParserTest\Condition;
+
+use PhpMyAdmin\SqlParser\Components\Condition;
+
+class WhereClauseParser
+{
+    /** @var ConditionTranslatorInterface[] */
+    private array $conditionTranslators;
+
+    /**
+     * @param ConditionTranslatorInterface[] $conditionTranslators
+     */
+    public function __construct(array $conditionTranslators = [])
+    {
+        $this->conditionTranslators = !empty($conditionTranslators) ? $conditionTranslators : [
+            new ComparisonConditionTranslator(),
+            new InListConditionTranslator(),
+            new LikeConditionTranslator(),
+        ];
+    }
+
+    /**
+     * @param Condition[] $where
+     *
+     * @return array<int, mixed>
+     */
+    public function parse(array $where): array
+    {
+        if (empty($where)) {
+            throw new \InvalidArgumentException('Empty WHERE clause.');
+        }
+
+        $tokens = $this->tokenizeWhere($where);
+        $index = 0;
+        $tree = $this->parseWhereOr($tokens, $index);
+
+        if ($index !== count($tokens)) {
+            throw new \InvalidArgumentException('Invalid WHERE clause.');
+        }
+
+        if (isset($tree['groupOperator']) && $tree['groupOperator'] === 'and') {
+            return $tree['conditions'];
+        }
+
+        return [$tree];
+    }
+
+    /**
+     * @param Condition[] $where
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function tokenizeWhere(array $where): array
+    {
+        $tokens = [];
+        foreach ($where as $part) {
+            if (!($part instanceof Condition)) {
+                throw new \InvalidArgumentException('Invalid WHERE clause.');
+            }
+
+            if ($part->isOperator) {
+                $operator = strtolower(trim($part->expr));
+                if ($operator !== 'and' && $operator !== 'or') {
+                    throw new \InvalidArgumentException('Invalid WHERE clause.');
+                }
+                $tokens[] = ['type' => 'operator', 'value' => $operator];
+                continue;
+            }
+
+            [$openParens, $closeParens] = $this->extractConditionParens($part);
+
+            for ($i = 0; $i < $openParens; $i++) {
+                $tokens[] = ['type' => 'lparen'];
+            }
+
+            $tokens[] = ['type' => 'condition', 'value' => $this->translateLeafCondition($part)];
+
+            for ($i = 0; $i < $closeParens; $i++) {
+                $tokens[] = ['type' => 'rparen'];
+            }
+        }
+
+        return $tokens;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function translateLeafCondition(Condition $condition): array
+    {
+        foreach ($this->conditionTranslators as $translator) {
+            if ($translator->supports($condition)) {
+                return $translator->translate($condition);
+            }
+        }
+
+        throw new \InvalidArgumentException('Unsupported WHERE condition.');
+    }
+
+    /**
+     * Extract the number of grouping parentheses surrounding a condition.
+     *
+     * @param Condition $condition
+     *   The condition component to inspect.
+     *
+     * @return array{0: int, 1: int}
+     *   A two-element array: [int $leadingOpenParens, int $trailingCloseParens].
+     */
+    private function extractConditionParens(Condition $condition): array
+    {
+        if (trim($condition->operator) !== '') {
+            $open = $this->countEdgeChar(trim($condition->leftOperand), '(', true);
+            $close = $this->countEdgeChar(trim($condition->rightOperand), ')', false);
+            return [$open, $close];
+        }
+
+        $expr = trim($condition->expr);
+        $open = $this->countEdgeChar($expr, '(', true);
+        $close = $this->countEdgeChar($expr, ')', false);
+
+        // IN/NOT IN always has a list-closing parenthesis that is not grouping.
+        if (preg_match('/\bNOT\s+IN\s*\(|\bIN\s*\(/i', $expr)) {
+            $close = max(0, $close - 1);
+        }
+
+        return [$open, $close];
+    }
+
+    /**
+     * Count consecutive occurrences of a character at the start or end of a string.
+     */
+    private function countEdgeChar(string $expr, string $char, bool $fromStart = true): int
+    {
+        $trimmed = $fromStart ? ltrim($expr, $char) : rtrim($expr, $char);
+        return strlen($expr) - strlen($trimmed);
+    }
+
+    /**
+     * Parse boolean OR expressions at the lowest operator precedence level.
+     *
+     * In the recursive descent grammar:
+     *   Expr -> Term ('OR' Term)*
+     *
+     * This method serves as the top-level expression entry point. Because `OR` has lower
+     * precedence than `AND`, it delegates evaluating each operand (`Term`) to `parseWhereAnd()`.
+     * If one or more `OR` operators follow, it consumes each right-hand `Term` and merges
+     * them into a `conditionGroup` with `groupOperator => 'or'`.
+     *
+     * @param array<int, array<string, mixed>> $tokens
+     *   The token stream generated by tokenizeWhere().
+     * @param int $index
+     *   The current position in the token stream (passed by reference, advanced on consumption).
+     *
+     * @return array<string, mixed>
+     *   A translated condition payload array (either a single condition, an AND
+     *   conditionGroup, or an OR conditionGroup).
+     */
+    private function parseWhereOr(array $tokens, int &$index): array
+    {
+        $left = $this->parseWhereAnd($tokens, $index);
+        while ($this->matchWhereOperator($tokens, $index, 'or')) {
+            $right = $this->parseWhereAnd($tokens, $index);
+            $left = $this->mergeConditionNodes('or', $left, $right);
+        }
+        return $left;
+    }
+
+    /**
+     * Parse boolean AND expressions at the intermediate operator precedence level.
+     *
+     * In the recursive descent grammar:
+     *   Term -> Factor ('AND' Factor)*
+     *
+     * Because `AND` has higher precedence than `OR` but lower precedence than parenthesized
+     * groups, it delegates evaluating each atomic operand (`Factor`) to `parseWhereFactor()`.
+     * If one or more `AND` operators follow, it consumes each right-hand `Factor` and merges
+     * them into a `conditionGroup` with `groupOperator => 'and'`.
+     *
+     * @param array<int, array<string, mixed>> $tokens
+     *   The token stream generated by tokenizeWhere().
+     * @param int $index
+     *   The current position in the token stream (passed by reference, advanced on consumption).
+     *
+     * @return array<string, mixed>
+     *   A translated condition payload array (either a single condition or an AND conditionGroup).
+     */
+    private function parseWhereAnd(array $tokens, int &$index): array
+    {
+        $left = $this->parseWhereFactor($tokens, $index);
+        while ($this->matchWhereOperator($tokens, $index, 'and')) {
+            $right = $this->parseWhereFactor($tokens, $index);
+            $left = $this->mergeConditionNodes('and', $left, $right);
+        }
+        return $left;
+    }
+
+    /**
+     * Parse the smallest indivisible unit (a "factor") in a boolean WHERE expression.
+     *
+     * In boolean logic parsing, a "factor" is the highest-precedence building block:
+     * 1. A parenthesized group, e.g. `(a = 1 OR b = 2)` — parsed as a self-contained unit.
+     * 2. An individual leaf condition, e.g. `record_number = 1` or `status LIKE "%active"`.
+     *
+     * How the three parsing levels relate:
+     * - `parseWhereOr()`     — Lowest precedence: splits on `OR` (e.g. `Term OR Term`)
+     * - `parseWhereAnd()`    — Medium precedence: splits on `AND` (e.g. `Factor AND Factor`)
+     * - `parseWhereFactor()` — Highest precedence: extracts `( ... )` or a single condition
+     *
+     * Behavior:
+     * - If token is `(`, recurses into `parseWhereOr()` to evaluate the inner expression,
+     *   asserts a closing `)`, and returns the inner tree.
+     * - If token is a condition, returns its pre-translated array payload directly.
+     *
+     * @param array<int, array<string, mixed>> $tokens
+     *   The token stream generated by tokenizeWhere().
+     * @param int $index
+     *   The current position in the token stream (passed by reference, advanced on consumption).
+     *
+     * @return array<string, mixed>
+     *   A translated condition payload array (either a single condition or a conditionGroup).
+     *
+     * @throws \InvalidArgumentException
+     *   If tokens are unexpectedly exhausted, a matching 'rparen' is missing,
+     *   or an unexpected token type is encountered.
+     */
+    private function parseWhereFactor(array $tokens, int &$index): array
+    {
+        if (!isset($tokens[$index])) {
+            throw new \InvalidArgumentException('Invalid WHERE clause.');
+        }
+
+        if ($tokens[$index]['type'] === 'lparen') {
+            $index++;
+            $node = $this->parseWhereOr($tokens, $index);
+            if (!isset($tokens[$index]) || $tokens[$index]['type'] !== 'rparen') {
+                throw new \InvalidArgumentException('Invalid WHERE clause.');
+            }
+            $index++;
+            return $node;
+        }
+
+        if ($tokens[$index]['type'] !== 'condition') {
+            throw new \InvalidArgumentException('Invalid WHERE clause.');
+        }
+
+        $node = $tokens[$index]['value'];
+        $index++;
+        return $node;
+    }
+
+    private function matchWhereOperator(array $tokens, int &$index, string $operator): bool
+    {
+        if (!isset($tokens[$index])) {
+            return false;
+        }
+        if ($tokens[$index]['type'] !== 'operator') {
+            return false;
+        }
+        if ($tokens[$index]['value'] !== $operator) {
+            return false;
+        }
+        $index++;
+        return true;
+    }
+
+    /**
+     * @param array<string, mixed> $left
+     * @param array<string, mixed> $right
+     *
+     * @return array<string, mixed>
+     */
+    private function mergeConditionNodes(string $operator, array $left, array $right): array
+    {
+        $conditions = [];
+        if (isset($left['groupOperator']) && $left['groupOperator'] === $operator) {
+            $conditions = array_merge($conditions, $left['conditions']);
+        } else {
+            $conditions[] = $left;
+        }
+
+        if (isset($right['groupOperator']) && $right['groupOperator'] === $operator) {
+            $conditions = array_merge($conditions, $right['conditions']);
+        } else {
+            $conditions[] = $right;
+        }
+
+        return [
+            'groupOperator' => $operator,
+            'conditions' => $conditions,
+        ];
+    }
+}
