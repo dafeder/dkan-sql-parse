@@ -9,7 +9,7 @@ use SqlParserTest\DatastoreQuery;
 use SqlParserTest\QueryTranslator;
 use SqlParserTest\SqlStatementParser;
 
-final class QueryTranslatorAstSlice2Test extends TestCase
+final class QueryTranslatorAstTest extends TestCase
 {
     private const RESOURCE_ID = '909ab5c6-54b6-40ac-96bc-f7198c9c734d';
 

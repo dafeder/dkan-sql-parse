@@ -2,47 +2,23 @@
 
 namespace SqlParserTest;
 
-use PhpMyAdmin\SqlParser\Components\Expression;
 use PhpMyAdmin\SqlParser\Components\Condition;
+use PhpMyAdmin\SqlParser\Components\Expression;
 use PhpMyAdmin\SqlParser\Components\Limit;
 use PhpMyAdmin\SqlParser\Components\OrderKeyword;
 use PhpMyAdmin\SqlParser\Statements\SelectStatement;
 
 /**
- * Translate a full parsed query.
+ * Translate phpmyadmin SQL parser statements into DatastoreQuery objects.
  */
 class QueryTranslator
 {
     private const DEFAULT_RESOURCE = 't';
-
-    private ?string $resource;
-    private array $parsed;
-    private bool $allowJoins;
-
-    /**
-     * Translate a parsed SQL query.
-     *
-     * @param array $parsed
-     *   The result of a PHPSQLParser operation on a SQL string.
-     * @param string|null $resource
-     *   A resource ID for the Datastore.
-     * @param bool $allowJoins
-     *   Whether joins are allowed or not in this query; defaults to false.
-     *
-     * @return DatastoreQuery
-     *   A valid DatastoreQuery object.
-     */
-    public static function translate(array $parsed, $resource = null, bool $allowJoins = false)
-    {
-        $translator = new static($parsed, $resource, $allowJoins);
-        return $translator->translateParsed();
-    }
+    private const ARITHMETIC_OPERATORS = ['+', '-', '*', '/', '%'];
+    private const AGGREGATE_OPERATORS = ['sum', 'count', 'avg', 'max', 'min'];
 
     /**
      * Translate a phpmyadmin SelectStatement query.
-     *
-     * Slice 2 intentionally supports SELECT/FROM/ORDER/LIMIT.
-     * WHERE and richer clauses are implemented in the next slice.
      */
     public static function translateStatement(SelectStatement $statement, ?string $resource = null): DatastoreQuery
     {
@@ -91,6 +67,7 @@ class QueryTranslator
         if (($expr->column === '*') || (trim((string) $expr->expr) === '*')) {
             return null;
         }
+
         if (!empty($expr->column)) {
             $property = [
                 'resource' => !empty($expr->table) ? $expr->table : self::DEFAULT_RESOURCE,
@@ -101,11 +78,204 @@ class QueryTranslator
         }
 
         if (!empty($expr->expr)) {
-            throw new \InvalidArgumentException(
-                'Unsupported SELECT expression for current parser path.'
-            );
+            return self::translateComputedStatementSelectExpression($expr);
         }
+
         throw new \InvalidArgumentException('Invalid SELECT expression.');
+    }
+
+    private static function translateComputedStatementSelectExpression(Expression $expr): array
+    {
+        if (empty($expr->alias)) {
+            throw new \InvalidArgumentException('Mathematical expressions must be aliased.');
+        }
+
+        if (!empty($expr->function)) {
+            $expression = self::translateAggregateExpression($expr);
+            return [
+                'expression' => $expression,
+                'alias' => $expr->alias,
+            ];
+        }
+
+        $expression = self::translateArithmeticExpression($expr->expr);
+        return [
+            'expression' => $expression,
+            'alias' => $expr->alias,
+        ];
+    }
+
+    /**
+     * @return array{operator: string, operands: array<int, mixed>}
+     */
+    private static function translateAggregateExpression(Expression $expr): array
+    {
+        $operator = strtolower((string) $expr->function);
+        if (!in_array($operator, self::AGGREGATE_OPERATORS, true)) {
+            throw new \InvalidArgumentException('Unsupported aggregate function.');
+        }
+
+        if (!preg_match('/^[A-Za-z_]+\s*\((.*)\)$/', trim((string) $expr->expr), $matches)) {
+            throw new \InvalidArgumentException('Missing arguments for aggregate function.');
+        }
+
+        $argument = trim($matches[1]);
+        if ($argument === '') {
+            throw new \InvalidArgumentException('Missing arguments for aggregate function.');
+        }
+
+        $operand = self::translateExpressionOperand($argument);
+        if ($operand === null) {
+            throw new \InvalidArgumentException('Mathmatical functions require property-specific arguments.');
+        }
+
+        return [
+            'operator' => $operator,
+            'operands' => [$operand],
+        ];
+    }
+
+    /**
+     * @return array{operator: string, operands: array<int, mixed>}
+     */
+    private static function translateArithmeticExpression(string $expr): array
+    {
+        $expression = self::trimWrappingParentheses(trim($expr));
+        [$operator, $left, $right] = self::splitTopLevelArithmeticExpression($expression);
+
+        return [
+            'operator' => $operator,
+            'operands' => [
+                self::translateExpressionOperand($left),
+                self::translateExpressionOperand($right),
+            ],
+        ];
+    }
+
+    /**
+     * @return array{0: string, 1: string, 2: string}
+     */
+    private static function splitTopLevelArithmeticExpression(string $expr): array
+    {
+        foreach ([['+', '-'], ['*', '/', '%']] as $ops) {
+            $depth = 0;
+            $length = strlen($expr);
+            for ($i = 0; $i < $length; $i++) {
+                $char = $expr[$i];
+                if ($char === '(') {
+                    $depth++;
+                    continue;
+                }
+                if ($char === ')') {
+                    $depth--;
+                    continue;
+                }
+                if ($depth !== 0 || !in_array($char, $ops, true)) {
+                    continue;
+                }
+                $left = trim(substr($expr, 0, $i));
+                $right = trim(substr($expr, $i + 1));
+                if ($left === '' || $right === '') {
+                    throw new \InvalidArgumentException('Invalid arithmetic expression.');
+                }
+                return [$char, $left, $right];
+            }
+        }
+
+        throw new \InvalidArgumentException('Invalid arithmetic expression.');
+    }
+
+    private static function trimWrappingParentheses(string $expr): string
+    {
+        while (
+            strlen($expr) > 1
+            && $expr[0] === '('
+            && $expr[strlen($expr) - 1] === ')'
+            && self::isWrappedBySingleParenthesisPair($expr)
+        ) {
+            $expr = trim(substr($expr, 1, -1));
+        }
+
+        return $expr;
+    }
+
+    private static function isWrappedBySingleParenthesisPair(string $expr): bool
+    {
+        $depth = 0;
+        $length = strlen($expr);
+        for ($i = 0; $i < $length; $i++) {
+            $char = $expr[$i];
+            if ($char === '(') {
+                $depth++;
+            } elseif ($char === ')') {
+                $depth--;
+                if ($depth === 0 && $i < $length - 1) {
+                    return false;
+                }
+            }
+        }
+
+        return $depth === 0;
+    }
+
+    /**
+     * @return array<string, mixed>|string|int|float|bool|null
+     */
+    private static function translateExpressionOperand(string $raw)
+    {
+        $operand = trim($raw);
+        if ($operand === '*') {
+            return null;
+        }
+
+        $operand = self::trimWrappingParentheses($operand);
+        if (self::containsTopLevelArithmeticOperator($operand)) {
+            return ['expression' => self::translateArithmeticExpression($operand)];
+        }
+
+        if (self::looksLikeIdentifier($operand)) {
+            return self::translateStatementIdentifier($operand);
+        }
+
+        return self::normalizeStatementValue($operand);
+    }
+
+    private static function containsTopLevelArithmeticOperator(string $expr): bool
+    {
+        $depth = 0;
+        $length = strlen($expr);
+        for ($i = 0; $i < $length; $i++) {
+            $char = $expr[$i];
+            if ($char === '(') {
+                $depth++;
+                continue;
+            }
+            if ($char === ')') {
+                $depth--;
+                continue;
+            }
+            if ($depth === 0 && in_array($char, self::ARITHMETIC_OPERATORS, true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function looksLikeIdentifier(string $value): bool
+    {
+        $value = trim($value);
+        if ($value === '') {
+            return false;
+        }
+        if (is_numeric($value)) {
+            return false;
+        }
+        if ($value[0] === '\'' || $value[0] === '"') {
+            return false;
+        }
+
+        return (bool) preg_match('/^`?[A-Za-z_][A-Za-z0-9_]*`?(?:\.`?[A-Za-z_][A-Za-z0-9_]*`?)*$/', $value);
     }
 
     /**
@@ -135,8 +305,7 @@ class QueryTranslator
         array &$query,
         ?string $resource,
         SelectStatement $statement
-    ): void
-    {
+    ): void {
         if ($resource && !empty($statement->from)) {
             throw new \InvalidArgumentException('You may not pass a FROM clause in a resource query.');
         }
@@ -179,8 +348,7 @@ class QueryTranslator
 
     private static function validateStatementClauses(
         SelectStatement $statement
-    ): void
-    {
+    ): void {
         if (!empty($statement->join)) {
             throw new \InvalidArgumentException(
                 'Joins are not permitted for this query; you have requested too many resources.'
@@ -492,274 +660,4 @@ class QueryTranslator
         return trim($value, "'\"");
     }
 
-    /**
-     * Constructor.
-     *
-     * @param array $parsed
-     *   The result of a PHPSQLParser operation on a SQL string.
-     * @param string|null $resource
-     *   A resource ID for the Datastore.
-     * @param bool $allowJoins
-     *   Whether joins are allowed or not in this query; defaults to false.
-     */
-    public function __construct(array $parsed, $resource = null, bool $allowJoins = false)
-    {
-        $this->resource = $resource;
-        $this->parsed = $parsed;
-        $this->allowJoins = $allowJoins;
-    }
-
-    /**
-     * Translate the loaded parsed query to a DatastoreQuery obejct.
-     *
-     * @return DatastoreQuery
-     *   Valid DatastoreQuery object.
-     */
-    public function translateParsed(): DatastoreQuery
-    {
-        $query = [];
-
-        $this->validateParsedClauses();
-
-        if (isset($this->parsed['SELECT'])) {
-            $query['properties'] = $this->translateSelect($this->parsed['SELECT']);
-        }
-        if (isset($this->parsed['FROM'])) {
-            $query['resources'] = $this->translateFrom($this->parsed['FROM']);
-            $query['joins'] = $this->translateFromJoins($this->parsed['FROM']);
-        }
-        $this->incorporateResource($query);
-        if (isset($this->parsed['WHERE'])) {
-            $query['conditions'] = $this->translateWhere($this->parsed['WHERE']);
-        }
-        if (isset($this->parsed['LIMIT'])) {
-            $query['limit'] = $this->translateLimit($this->parsed['LIMIT']);
-            $query['offset'] = $this->translateLimitOffset($this->parsed['LIMIT']);
-        }
-        if (isset($this->parsed['ORDER'])) {
-            $query['sorts'] = $this->translateOrder($this->parsed['ORDER']);
-        }
-
-        $query = array_filter($query);
-        return new DatastoreQuery($query);
-    }
-
-    /**
-     * Throws an exception if unallowed clauses detected.
-     *
-     * @return true
-     *   True if clauses all passed.
-     *
-     * @throws \InvalidArgumentException
-     */
-    private function validateParsedClauses()
-    {
-        $clauses = array_keys($this->parsed);
-        $allowed = ['SELECT', 'FROM', 'WHERE', 'LIMIT', 'ORDER'];
-        $diff = array_diff($clauses, $allowed);
-        if (count($diff)) {
-            $bad = implode(", ", $diff);
-            throw new \InvalidArgumentException("Prohibited SQL clauses detected: $bad");
-        }
-        return true;
-    }
-
-    /**
-     * Translate the FROM clause.
-     *
-     * @param array $from
-     *   FROM array from a full PHPSQLParser array.
-     *
-     * @return array
-     *   Array of DatastoreQuery resources.
-     */
-    private function translateFrom(array $from): array
-    {
-        $this->incorporateResource($from);
-        $this->validateJoins($from);
-        $resources = [];
-        foreach ($from as $resource) {
-            $resources[] = TreeTranslator::translate($resource);
-        }
-        return array_filter($resources);
-    }
-
-    private function incorporateResource(array &$query)
-    {
-        if ($this->resource && isset($this->parsed['FROM'])) {
-            throw new \InvalidArgumentException("You may not pass a FROM clause in a resource query.");
-        } elseif ($this->resource) {
-            $query['resources'] = [
-                [
-                    'id' => $this->resource,
-                    'alias' => 't',
-                ],
-            ];
-        }
-    }
-
-    /**
-     * Translate the FROM clause to joins on another pass.
-     *
-     * @param array $from
-     *   FROM array from a full PHPSQLParser array.
-     *
-     * @return array
-     *   Array of DatastoreQuery joins.
-     *
-     * @todo Add actual JOIN support.
-     */
-    private function translateFromJoins(array $from)
-    {
-        if ($this->addJoins()) {
-            throw new \Exception("Joins not yet supported in SQL queries.");
-        } else {
-            return null;
-        }
-    }
-
-    /**
-     * Check whether or not to add a joins array to the query.
-     *
-     * @return bool
-     *   True if we should attempt to add joins.
-     */
-    private function addJoins(): bool
-    {
-        return (
-            !empty($this->parsed['FROM'])
-            && $this->allowJoins
-            && count($this->parsed['FROM']) > 1
-        );
-    }
-
-    /**
-     * Ensure the FROM clause is valid given the allowJoins argument.
-     *
-     * @param array $from
-     *   FROM array from a full PHPSQLParser array.
-     *
-     * @return bool
-     *   Returns true if the FROM array is valid for this query.
-     *
-     * @throws \Exception
-     *   This method will throw an exception if the FROM array violates the rules.
-     */
-    private function validateJoins(array $from)
-    {
-        if ($this->allowJoins) {
-            return true;
-        }
-        if (count($from) > 1) {
-            throw new \Exception("Joins are not permitted for this query; you have requested too many resources.");
-        }
-        return true;
-    }
-
-    /**
-     * Translate the SELECT clause.
-     *
-     * @param array $select
-     *   FROM array from a full PHPSQLParser array.
-     *
-     * @return array
-     *   Array of DatastoreQuery properties.
-     */
-    private function translateSelect(array $select): array
-    {
-        $properties = [];
-        try {
-            foreach ($select as $property) {
-                $properties[] = TreeTranslator::translate($property);
-            }
-        } catch (\Exception $e) {
-            throw new \InvalidArgumentException("Invalid SELECT clause. " . $e->getMessage());
-        }
-        return array_filter($properties);
-    }
-
-
-    /**
-     * WHERE clause requires more complex logic to break up.
-     *
-     * @param array $where
-     *   FROM array from a full PHPSQLParser array.
-     *
-     * @return array
-     *   Conditions array for DatastoreQuery.
-     */
-    private function translateWhere(array $where)
-    {
-        if (!is_array($where) || empty($where)) {
-            throw new \InvalidArgumentException("Invalid WHERE clause.");
-        }
-
-        // If there's only one item in the where array, it must be
-        // a single bracket expression.
-        if (count($where) == 1) {
-            return [TreeTranslator::translate($where[0])];
-        }
-
-        // Otherwise, it's some kind of expression.
-        $whereGroup = TreeTranslator::translate([
-            'expr_type' => 'bracket_expression',
-            'sub_tree' => $where
-        ]);
-        // If it's a group with "and" operator, can be a simple array.
-        if (isset($whereGroup['groupOperator']) && $whereGroup['groupOperator'] == 'and') {
-            return $whereGroup['conditions'];
-        }
-        // Otherwise, it's either a single condition or a valid condition group.
-        return [$whereGroup];
-    }
-
-    /**
-     * Translate the LIMIT clause to a value for DatastoreQuery "limit".
-     *
-     * @param array $limit
-     *   LIMIT array from a full PHPSQLParser array.
-     *
-     * @return int|null
-     *   A limit value, if present.
-     */
-    private function translateLimit($limit)
-    {
-        return ((int) $limit['rowcount']) ?? null;
-    }
-
-    /**
-     * Translate the LIMIT clause to a value for DatastoreQuery "offset".
-     *
-     * @param array $limit
-     *   LIMIT array from a full PHPSQLParser array.
-     *
-     * @return int|null
-     *   An offset value, if present.
-     */
-    private function translateLimitOffset($limit)
-    {
-        return ((int) $limit['offset']) ?? null;
-    }
-
-    /**
-     * Translate the ORDER clause to DatastoreQuery "sorts".
-     *
-     * @param array $order
-     *   ORDER array from a full PHPSQLParser array.
-     *
-     * @return array
-     *   An array of sort arrays for DatastoreQuery.
-     */
-    private function translateOrder(array $order): array
-    {
-        $sorts = [];
-        try {
-            foreach ($order as $sort) {
-                $sorts[] = TreeTranslator::translate($sort);
-            }
-        } catch (\Exception $e) {
-            throw new \InvalidArgumentException("Invalid ORDER clause. " . $e->getMessage());
-        }
-        return array_filter($sorts);
-    }
 }

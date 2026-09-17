@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace SqlParserTest\Tests;
 
-use PHPSQLParser\PHPSQLParser;
 use PHPUnit\Framework\TestCase;
 use SqlParserTest\DatastoreQuery;
 use SqlParserTest\QueryTranslator;
+use SqlParserTest\SqlStatementParser;
 
 final class QueryTranslatorBaselineTest extends TestCase
 {
@@ -64,6 +64,23 @@ final class QueryTranslatorBaselineTest extends TestCase
         );
     }
 
+    public function testTranslatesQualifiedAggregateWithAlias(): void
+    {
+        $sql = sprintf(
+            'SELECT SUM(t.amount) AS total FROM `%s` t',
+            self::RESOURCE_ID
+        );
+
+        $payload = $this->translateSqlToPayload($sql);
+
+        self::assertSame('sum', $payload['properties'][0]['expression']['operator']);
+        self::assertSame('total', $payload['properties'][0]['alias']);
+        self::assertSame(
+            [['resource' => 't', 'property' => 'amount']],
+            $payload['properties'][0]['expression']['operands']
+        );
+    }
+
     public function testTranslatesArithmeticExpressionWithAlias(): void
     {
         $sql = sprintf(
@@ -110,17 +127,17 @@ final class QueryTranslatorBaselineTest extends TestCase
         self::assertSame('record_number', $payload['properties'][0]['property']);
     }
 
-    public function testThrowsForUnparenthesizedBooleanWhereInCurrentBehavior(): void
+    public function testTranslatesUnparenthesizedBooleanWhere(): void
     {
         $sql = sprintf(
             'SELECT record_number FROM `%s` t WHERE record_number = 1 AND record_number > 0',
             self::RESOURCE_ID
         );
 
-        $this->expectException(\DomainException::class);
-        $this->expectExceptionMessage('Invalid mix of expressions. Try separating expressions with parentheses.');
-
-        $this->translateSqlToPayload($sql);
+        $payload = $this->translateSqlToPayload($sql);
+        self::assertCount(2, $payload['conditions']);
+        self::assertSame('=', $payload['conditions'][0]['operator']);
+        self::assertSame('>', $payload['conditions'][1]['operator']);
     }
 
     public function testThrowsForProhibitedClause(): void
@@ -131,15 +148,28 @@ final class QueryTranslatorBaselineTest extends TestCase
         );
 
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Prohibited SQL clauses detected: GROUP');
+        $this->expectExceptionMessage('Prohibited SQL clauses detected');
+
+        $this->translateSqlToPayload($sql);
+    }
+
+    public function testThrowsForComputedExpressionWithoutAlias(): void
+    {
+        $sql = sprintf(
+            'SELECT (record_number + 4) FROM `%s` t',
+            self::RESOURCE_ID
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Mathematical expressions must be aliased.');
 
         $this->translateSqlToPayload($sql);
     }
 
     private function translateSqlToPayload(string $sql, ?string $resource = null): array
     {
-        $parser = new PHPSQLParser($sql);
-        $query = QueryTranslator::translate($parser->parsed, $resource);
+        $statement = (new SqlStatementParser())->parseSelect($sql);
+        $query = QueryTranslator::translateStatement($statement, $resource);
         $payload = json_decode($query->pretty(), true, 512, JSON_THROW_ON_ERROR);
         $validated = new DatastoreQuery($payload);
         self::assertInstanceOf(DatastoreQuery::class, $validated);

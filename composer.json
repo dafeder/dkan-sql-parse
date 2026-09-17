@@ -3,7 +3,6 @@
     "description": "Testing parsing",
     "require": {
         "symfony/console": "^5.3",
-        "greenlion/php-sql-parser": "^4.4",
         "getdkan/rooted-json-data": "^0.0.4",
         "phpmyadmin/sql-parser": "^6"
     },
