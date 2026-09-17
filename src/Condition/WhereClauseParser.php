@@ -19,6 +19,7 @@ class WhereClauseParser
         $this->conditionTranslators = !empty($conditionTranslators) ? $conditionTranslators : [
             new ComparisonConditionTranslator(),
             new InListConditionTranslator(),
+            new LikeConditionTranslator(),
         ];
     }
 

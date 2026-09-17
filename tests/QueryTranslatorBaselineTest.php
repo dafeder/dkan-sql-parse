@@ -140,6 +140,20 @@ final class QueryTranslatorBaselineTest extends TestCase
         self::assertSame('>', $payload['conditions'][1]['operator']);
     }
 
+    public function testTranslatesLikeCondition(): void
+    {
+        $sql = sprintf(
+            'SELECT record_number FROM `%s` t WHERE record_number LIKE "%%value"',
+            self::RESOURCE_ID
+        );
+
+        $payload = $this->translateSqlToPayload($sql);
+
+        self::assertSame('like', $payload['conditions'][0]['operator']);
+        self::assertSame('%value', $payload['conditions'][0]['value']);
+    }
+
+
     public function testThrowsForProhibitedClause(): void
     {
         $sql = sprintf(
